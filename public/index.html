@@ -6743,12 +6743,7 @@ function abrirNotificacionEstibadoresOperador(){
       return false;
     }
     const snapshot = buildOperationalSnapshot();
-    const envelope = {
-      kind: 'PlantOpsRealtimeSync',
-      updatedAt: snapshot.updatedAt || new Date().toISOString(),
-      data: snapshot,
-      snapshot: snapshot
-    };
+    const envelope = snapshot;
     try {
       setSyncStatus('Sincronizando cambios a la nube' + (reason ? ' (' + reason + ')' : '') + '...', 'ok');
       const response = await fetch(url, {

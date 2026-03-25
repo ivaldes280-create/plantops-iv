@@ -6500,18 +6500,11 @@ function abrirNotificacionEstibadoresOperador(){
   const SYNC_API_KEY = 'plantops123';
   const SYNC_DEVICE_KEY = 'plantops_cloud_sync_device_id_v1';
   const STRUCTURE_KEY = 'plantops_cleaning_structure_v1';
-  const SYNC_POLL_VISIBLE_MS = 15000;
-  const SYNC_PULL_DEBOUNCE_MS = 4000;
-  const SYNC_PUSH_DEBOUNCE_MS = 1200;
   let syncPollingHandle = null;
   let syncStructureWatcher = null;
   let applyingRemoteSnapshot = false;
   let localStructureHash = '';
   let latestAppliedStamp = '';
-  let syncPullInFlight = false;
-  let syncPushInFlight = false;
-  let lastPullAt = 0;
-  let lastPushAt = 0;
 
   function byIdSync(id){ return document.getElementById(id); }
   function cloneSync(obj){
@@ -6606,13 +6599,90 @@ function abrirNotificacionEstibadoresOperador(){
     } catch(e){}
   }
   function normalizePulledSnapshot(payload){
-    if(!payload || typeof payload !== 'object') return null;
-    if(payload.snapshot && typeof payload.snapshot === 'object') return payload.snapshot;
-    if(payload.data && payload.data.registros) return payload;
-    if(payload.registros || payload.cierresDiarios || payload.estructuraLimpieza) {
-      return { updatedAt: payload.updatedAt || new Date().toISOString(), data: payload };
+    if(payload == null) return null;
+
+    function tryParseJson(value){
+      if(typeof value !== 'string') return value;
+      const limpio = value.trim();
+      if(!limpio) return null;
+      try { return JSON.parse(limpio); } catch(_) { return value; }
     }
-    if(payload.kind === 'PlantOpsRealtimeSync') return payload;
+
+    payload = tryParseJson(payload);
+
+    if(payload == null) return null;
+
+    if(typeof payload === 'string'){
+      const limpio = payload.trim();
+      if(!limpio) return null;
+      try { payload = JSON.parse(limpio); }
+      catch(_) { return null; }
+    }
+
+    if(Array.isArray(payload)){
+      return { updatedAt: new Date().toISOString(), data: { registros: payload } };
+    }
+
+    if(typeof payload !== 'object') return null;
+
+    const candidateContainers = [
+      payload,
+      payload.snapshot,
+      payload.data,
+      payload.body,
+      payload.result,
+      payload.value,
+      payload.fileContent,
+      payload.content,
+      payload.json,
+      payload.payload,
+      payload.item,
+      payload.response
+    ];
+
+    for(const candidate of candidateContainers){
+      let current = tryParseJson(candidate);
+      if(!current) continue;
+      if(typeof current === 'string'){
+        current = tryParseJson(current);
+      }
+      if(!current || typeof current !== 'object') continue;
+
+      if(current.snapshot && typeof current.snapshot === 'object'){
+        const snap = tryParseJson(current.snapshot);
+        if(snap && typeof snap === 'object') current = snap;
+      }
+
+      if(current.kind === 'PlantOpsRealtimeSync' && current.data){
+        return current;
+      }
+      if(current.data && current.data.registros){
+        return current;
+      }
+      if(current.registros || current.cierresDiarios || current.estructuraLimpieza || current.personalRegistry){
+        return { updatedAt: current.updatedAt || payload.updatedAt || new Date().toISOString(), data: current };
+      }
+
+      const nested = [
+        current.snapshot, current.data, current.body, current.result, current.value,
+        current.fileContent, current.content, current.json, current.payload, current.item, current.response
+      ];
+      for(const innerRaw of nested){
+        let inner = tryParseJson(innerRaw);
+        if(!inner) continue;
+        if(typeof inner === 'string') inner = tryParseJson(inner);
+        if(!inner || typeof inner !== 'object') continue;
+        if(inner.kind === 'PlantOpsRealtimeSync' && inner.data){
+          return inner;
+        }
+        if(inner.data && inner.data.registros){
+          return inner;
+        }
+        if(inner.registros || inner.cierresDiarios || inner.estructuraLimpieza || inner.personalRegistry){
+          return { updatedAt: inner.updatedAt || current.updatedAt || payload.updatedAt || new Date().toISOString(), data: inner };
+        }
+      }
+    }
     return null;
   }
   function applyOperationalSnapshot(snapshot){
@@ -6682,9 +6752,6 @@ function abrirNotificacionEstibadoresOperador(){
   }
   async function pushOperationalSnapshot(reason){
     if(applyingRemoteSnapshot) return false;
-    if(syncPushInFlight) return false;
-    const now = Date.now();
-    if(reason !== 'manual' && (now - lastPushAt) < SYNC_PUSH_DEBOUNCE_MS) return false;
     const url = getLiveSyncUrl('syncPushUrlInput', SYNC_PUSH_KEY, SYNC_DEFAULT_PUSH_URL);
     if(!url || !/^https?:/i.test(url)){
       if(reason === 'manual') setSyncStatus('Configura primero un webhook válido de guardado con &sig=...', 'warn');
@@ -6698,7 +6765,6 @@ function abrirNotificacionEstibadoresOperador(){
       snapshot: snapshot
     };
     try {
-      syncPushInFlight = true;
       setSyncStatus('Sincronizando cambios a la nube' + (reason ? ' (' + reason + ')' : '') + '...', 'ok');
       const response = await fetch(url, {
         method: 'POST',
@@ -6718,34 +6784,31 @@ function abrirNotificacionEstibadoresOperador(){
       }
       latestAppliedStamp = snapshot.updatedAt;
       window.__plantopsLastAppliedHash = hashSync(snapshot.data);
-      lastPushAt = Date.now();
       setSyncStatus('Cambios enviados correctamente a la nube.', 'ok');
       return true;
     } catch(err){
       console.error('Error enviando sincronización operativa', err);
       setSyncStatus('No se pudo enviar la sincronización operativa.', 'error');
       return false;
-    } finally {
-      syncPushInFlight = false;
     }
   }
   async function pullOperationalSnapshot(reason){
     if(applyingRemoteSnapshot) return false;
-    if(syncPullInFlight) return false;
-    const now = Date.now();
-    if(reason !== 'manual' && reason !== 'boot' && reason !== 'login' && reason !== 'focus' && (now - lastPullAt) < SYNC_PULL_DEBOUNCE_MS) return false;
     const url = getLiveSyncUrl('syncPullUrlInput', SYNC_PULL_KEY, SYNC_DEFAULT_PULL_URL);
     if(!url || !/^https?:/i.test(url)){
       if(reason === 'manual') setSyncStatus('Configura primero un webhook válido de lectura con &sig=...', 'warn');
       return false;
     }
     try {
-      syncPullInFlight = true;
       if(reason === 'manual') setSyncStatus('Consultando cambios en la nube...', 'ok');
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({})
+        headers: {
+          'Accept': 'application/json, text/plain, */*',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({}),
+        cache: 'no-store'
       });
       if(!response.ok && response.status !== 202){
         setSyncStatus('La nube respondió con error ' + response.status + ' al leer.', 'error');
@@ -6756,23 +6819,25 @@ function abrirNotificacionEstibadoresOperador(){
         if(reason === 'manual') setSyncStatus('La nube respondió vacía. Aún no hay base central cargada.', 'warn');
         return false;
       }
+
       let payload = null;
       try { payload = JSON.parse(text); }
-      catch(err){
-        console.error('Respuesta JSON inválida desde lectura operativa', err, text);
-        setSyncStatus('La respuesta de lectura no vino en JSON válido.', 'error');
-        return false;
-      }
+      catch(_) { payload = text; }
+
       const changed = applyOperationalSnapshot(payload);
-      lastPullAt = Date.now();
-      if(reason === 'manual') setSyncStatus(changed ? 'Datos operativos cargados desde la nube.' : 'No había cambios nuevos en la nube.', changed ? 'ok' : 'warn');
+
+      if(!changed){
+        console.warn('Lectura operativa recibida pero no reconocida:', payload);
+      }
+
+      if(reason === 'manual') {
+        setSyncStatus(changed ? 'Datos operativos cargados desde la nube.' : 'La nube respondió, pero el formato no coincidió con el snapshot esperado.', changed ? 'ok' : 'warn');
+      }
       return changed;
     } catch(err){
       console.error('Error leyendo sincronización operativa', err);
       if(reason === 'manual') setSyncStatus('No se pudo leer la sincronización operativa.', 'error');
       return false;
-    } finally {
-      syncPullInFlight = false;
     }
   }
   function ensureRealtimeSyncPanel(){
@@ -6858,23 +6923,11 @@ function abrirNotificacionEstibadoresOperador(){
     wrapSaveFunction('guardarProduccionLocal', 'produccion');
     wrapSaveFunction('lanzarExportacionNube', 'exportacion');
   }
-  function stopRealtimeAutoPull(){
-    if(syncPollingHandle){
-      clearInterval(syncPollingHandle);
-      syncPollingHandle = null;
-    }
-  }
-  function startRealtimeAutoPull(){
-    if(document.hidden) return;
-    if(syncPollingHandle) return;
-    syncPollingHandle = setInterval(function(){
-      if(document.hidden) return;
-      pullOperationalSnapshot('auto');
-    }, SYNC_POLL_VISIBLE_MS);
-  }
   function startRealtimeSync(){
     installSaveHooks();
-    startRealtimeAutoPull();
+    if(!syncPollingHandle){
+      syncPollingHandle = setInterval(function(){ pullOperationalSnapshot('auto'); }, 15000);
+    }
     if(!syncStructureWatcher){
       localStructureHash = localStorage.getItem(STRUCTURE_KEY) || '';
       syncStructureWatcher = setInterval(function(){
@@ -6909,17 +6962,9 @@ function abrirNotificacionEstibadoresOperador(){
   window.pushOperationalSnapshotPlantOps = pushOperationalSnapshot;
 
   document.addEventListener('visibilitychange', function(){
-    if(document.hidden){
-      stopRealtimeAutoPull();
-      return;
-    }
-    startRealtimeAutoPull();
-    pullOperationalSnapshot('focus');
+    if(!document.hidden) pullOperationalSnapshot('focus');
   });
-  window.addEventListener('focus', function(){
-    startRealtimeAutoPull();
-    pullOperationalSnapshot('focus');
-  });
+  window.addEventListener('focus', function(){ pullOperationalSnapshot('focus'); });
   document.addEventListener('DOMContentLoaded', function(){
     const storedPush = String(localStorage.getItem(SYNC_PUSH_KEY) || '').trim();
     const storedPull = String(localStorage.getItem(SYNC_PULL_KEY) || '').trim();

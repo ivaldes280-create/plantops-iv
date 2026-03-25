@@ -6600,84 +6600,47 @@ function abrirNotificacionEstibadoresOperador(){
   }
   function normalizePulledSnapshot(payload){
     if(payload == null) return null;
-
     function tryParseJson(value){
       if(typeof value !== 'string') return value;
       const limpio = value.trim();
       if(!limpio) return null;
       try { return JSON.parse(limpio); } catch(_) { return value; }
     }
-
     payload = tryParseJson(payload);
-
     if(payload == null) return null;
-
     if(typeof payload === 'string'){
       const limpio = payload.trim();
       if(!limpio) return null;
       try { payload = JSON.parse(limpio); }
       catch(_) { return null; }
     }
-
     if(Array.isArray(payload)){
       return { updatedAt: new Date().toISOString(), data: { registros: payload } };
     }
-
     if(typeof payload !== 'object') return null;
-
-    const candidateContainers = [
-      payload,
-      payload.snapshot,
-      payload.data,
-      payload.body,
-      payload.result,
-      payload.value,
-      payload.fileContent,
-      payload.content,
-      payload.json,
-      payload.payload,
-      payload.item,
-      payload.response
-    ];
-
+    const candidateContainers = [payload,payload.snapshot,payload.data,payload.body,payload.result,payload.value,payload.fileContent,payload.content,payload.json,payload.payload,payload.item,payload.response];
     for(const candidate of candidateContainers){
       let current = tryParseJson(candidate);
       if(!current) continue;
-      if(typeof current === 'string'){
-        current = tryParseJson(current);
-      }
+      if(typeof current === 'string') current = tryParseJson(current);
       if(!current || typeof current !== 'object') continue;
-
       if(current.snapshot && typeof current.snapshot === 'object'){
         const snap = tryParseJson(current.snapshot);
         if(snap && typeof snap === 'object') current = snap;
       }
-
-      if(current.kind === 'PlantOpsRealtimeSync' && current.data){
-        return current;
-      }
-      if(current.data && current.data.registros){
-        return current;
-      }
+      if(current.kind === 'PlantOpsRealtimeSync' && current.data) return current;
+      if(current.data && current.data.registros) return current;
       if(current.registros || current.cierresDiarios || current.estructuraLimpieza || current.personalRegistry){
         return { updatedAt: current.updatedAt || payload.updatedAt || new Date().toISOString(), data: current };
       }
-
-      const nested = [
-        current.snapshot, current.data, current.body, current.result, current.value,
-        current.fileContent, current.content, current.json, current.payload, current.item, current.response
-      ];
+      const nested=[current.snapshot,current.data,current.body,current.result,current.value,current.fileContent,current.content,current.json,current.payload,current.item,current.response];
       for(const innerRaw of nested){
-        let inner = tryParseJson(innerRaw);
+        let inner=tryParseJson(innerRaw);
         if(!inner) continue;
         if(typeof inner === 'string') inner = tryParseJson(inner);
         if(!inner || typeof inner !== 'object') continue;
-        if(inner.kind === 'PlantOpsRealtimeSync' && inner.data){
-          return inner;
-        }
-        if(inner.data && inner.data.registros){
-          return inner;
-        }
+        if(inner.kind === 'PlantOpsRealtimeSync' && inner.data) return inner;
+        if(inner.data && inner.data.registros) return inner;
         if(inner.registros || inner.cierresDiarios || inner.estructuraLimpieza || inner.personalRegistry){
           return { updatedAt: inner.updatedAt || current.updatedAt || payload.updatedAt || new Date().toISOString(), data: inner };
         }
@@ -6694,6 +6657,9 @@ function abrirNotificacionEstibadoresOperador(){
     applyingRemoteSnapshot = true;
     try {
       registros = cloneSync(Array.isArray(normalized.data.registros) ? normalized.data.registros : []);
+      window.registros = cloneSync(registros);
+      try { if(typeof asegurarUidEnRegistros === 'function') asegurarUidEnRegistros(); } catch(e){}
+      try { if(typeof persistCombinedToSeparatedStores === 'function') persistCombinedToSeparatedStores(); } catch(e){ console.error('Error persistiendo stores activos tras pull remoto', e); }
       cierresDiarios = cloneSync(normalized.data.cierresDiarios || {});
       ultimoCierreDia = normalized.data.ultimoCierreDia || '';
       accesosTermosellado = cloneSync(Array.isArray(normalized.data.accesosTermosellado) ? normalized.data.accesosTermosellado : []);
@@ -6803,10 +6769,7 @@ function abrirNotificacionEstibadoresOperador(){
       if(reason === 'manual') setSyncStatus('Consultando cambios en la nube...', 'ok');
       const response = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Accept': 'application/json, text/plain, */*',
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/plain, */*' },
         body: JSON.stringify({}),
         cache: 'no-store'
       });
@@ -6819,20 +6782,12 @@ function abrirNotificacionEstibadoresOperador(){
         if(reason === 'manual') setSyncStatus('La nube respondió vacía. Aún no hay base central cargada.', 'warn');
         return false;
       }
-
       let payload = null;
       try { payload = JSON.parse(text); }
       catch(_) { payload = text; }
-
       const changed = applyOperationalSnapshot(payload);
-
-      if(!changed){
-        console.warn('Lectura operativa recibida pero no reconocida:', payload);
-      }
-
-      if(reason === 'manual') {
-        setSyncStatus(changed ? 'Datos operativos cargados desde la nube.' : 'La nube respondió, pero el formato no coincidió con el snapshot esperado.', changed ? 'ok' : 'warn');
-      }
+      if(!changed){ console.warn('Lectura operativa recibida pero no reconocida:', payload); }
+      if(reason === 'manual') setSyncStatus(changed ? 'Datos operativos cargados desde la nube.' : 'La nube respondió, pero el formato no coincidió con el snapshot esperado.', changed ? 'ok' : 'warn');
       return changed;
     } catch(err){
       console.error('Error leyendo sincronización operativa', err);

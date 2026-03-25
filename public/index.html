@@ -6538,13 +6538,32 @@ function abrirNotificacionEstibadoresOperador(){
     };
   }
   function buildOperationalSnapshot(){
+    let registrosFuente = [];
+    try {
+      if(typeof getAllActiveRecords === 'function'){
+        registrosFuente = getAllActiveRecords();
+      } else if(typeof window.syncCombinedRegistrosPlantOps === 'function'){
+        registrosFuente = window.syncCombinedRegistrosPlantOps() || [];
+      } else if(Array.isArray(window.registros)){
+        registrosFuente = window.registros;
+      } else if(Array.isArray(registros)){
+        registrosFuente = registros;
+      }
+    } catch(e){
+      registrosFuente = Array.isArray(window.registros) ? window.registros : (Array.isArray(registros) ? registros : []);
+    }
+    try {
+      window.registros = cloneSync(Array.isArray(registrosFuente) ? registrosFuente : []);
+      registros = cloneSync(Array.isArray(registrosFuente) ? registrosFuente : []);
+      if(typeof persistCombinedToSeparatedStores === 'function') persistCombinedToSeparatedStores();
+    } catch(e){}
     return {
       kind: 'PlantOpsRealtimeSync',
       schemaVersion: 2,
       updatedAt: new Date().toISOString(),
       deviceId: getDeviceId(),
       data: {
-        registros: cloneSync(Array.isArray(registros) ? registros : []),
+        registros: cloneSync(Array.isArray(registrosFuente) ? registrosFuente : []),
         cierresDiarios: cloneSync(cierresDiarios || {}),
         ultimoCierreDia: ultimoCierreDia || '',
         accesosTermosellado: cloneSync(Array.isArray(accesosTermosellado) ? accesosTermosellado : []),
@@ -6785,10 +6804,17 @@ function abrirNotificacionEstibadoresOperador(){
       let payload = null;
       try { payload = JSON.parse(text); }
       catch(_) { payload = text; }
+      const normalized = normalizePulledSnapshot(payload);
       const changed = applyOperationalSnapshot(payload);
-      if(!changed){ console.warn('Lectura operativa recibida pero no reconocida:', payload); }
-      if(reason === 'manual') setSyncStatus(changed ? 'Datos operativos cargados desde la nube.' : 'La nube respondió, pero el formato no coincidió con el snapshot esperado.', changed ? 'ok' : 'warn');
-      return changed;
+      if(!normalized){ console.warn('Lectura operativa recibida pero no reconocida:', payload); }
+      if(reason === 'manual'){
+        if(!normalized){
+          setSyncStatus('La nube respondió, pero el formato no coincidió con el snapshot esperado.', 'warn');
+        } else {
+          setSyncStatus(changed ? 'Datos operativos cargados desde la nube.' : 'Datos operativos ya estaban actualizados.', 'ok');
+        }
+      }
+      return changed || !!normalized;
     } catch(err){
       console.error('Error leyendo sincronización operativa', err);
       if(reason === 'manual') setSyncStatus('No se pudo leer la sincronización operativa.', 'error');

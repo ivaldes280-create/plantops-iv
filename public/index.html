@@ -6493,18 +6493,25 @@ function abrirNotificacionEstibadoresOperador(){
   const SYNC_PULL_KEY = 'plantops_cloud_sync_pull_url_v1';
   const SYNC_EVIDENCE_KEY = 'plantops_cloud_sync_evidence_url_v1';
   const SYNC_REPORTS_KEY = 'plantops_cloud_sync_reports_url_v1';
-  const SYNC_DEFAULT_PUSH_URL = '';
+  const SYNC_DEFAULT_PUSH_URL = 'https://default615f938fb03f4133941db4145eb714.a9.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/97f28767504a4584979875428df98941/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=MzUbPZXaDUeomDySKQZ20hw93EH1lHdQ9wV_MSN5rj8';
   const SYNC_DEFAULT_PULL_URL = 'https://default615f938fb03f4133941db4145eb714.a9.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/f331e07fc70b4182bb2ecb8b6eb89100/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=_NbmkECmnVG0SwFHxUqbTHledBZoQqYRDawxiHUYh6I';
-  const SYNC_DEFAULT_EVIDENCE_URL = '';
-  const SYNC_DEFAULT_REPORTS_URL = '';
+  const SYNC_DEFAULT_EVIDENCE_URL = 'https://default615f938fb03f4133941db4145eb714.a9.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/04ec4ab683fe4175b5204af782eb11a6/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=jEbjO3g9oQ9SFQZvpXmYcQFWbydDv9qBPT64yhgzwx4';
+  const SYNC_DEFAULT_REPORTS_URL = 'https://default615f938fb03f4133941db4145eb714.a9.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/076dbbcd66a14889ae922ec5bd980d28/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=Azb9ICVeg49vLAzw_zxcBTXShc_MNrGA7r-IO5tqf3I';
   const SYNC_API_KEY = 'plantops123';
   const SYNC_DEVICE_KEY = 'plantops_cloud_sync_device_id_v1';
   const STRUCTURE_KEY = 'plantops_cleaning_structure_v1';
+  const SYNC_POLL_VISIBLE_MS = 15000;
+  const SYNC_PULL_DEBOUNCE_MS = 4000;
+  const SYNC_PUSH_DEBOUNCE_MS = 1200;
   let syncPollingHandle = null;
   let syncStructureWatcher = null;
   let applyingRemoteSnapshot = false;
   let localStructureHash = '';
   let latestAppliedStamp = '';
+  let syncPullInFlight = false;
+  let syncPushInFlight = false;
+  let lastPullAt = 0;
+  let lastPushAt = 0;
 
   function byIdSync(id){ return document.getElementById(id); }
   function cloneSync(obj){
@@ -6675,6 +6682,9 @@ function abrirNotificacionEstibadoresOperador(){
   }
   async function pushOperationalSnapshot(reason){
     if(applyingRemoteSnapshot) return false;
+    if(syncPushInFlight) return false;
+    const now = Date.now();
+    if(reason !== 'manual' && (now - lastPushAt) < SYNC_PUSH_DEBOUNCE_MS) return false;
     const url = getLiveSyncUrl('syncPushUrlInput', SYNC_PUSH_KEY, SYNC_DEFAULT_PUSH_URL);
     if(!url || !/^https?:/i.test(url)){
       if(reason === 'manual') setSyncStatus('Configura primero un webhook válido de guardado con &sig=...', 'warn');
@@ -6688,6 +6698,7 @@ function abrirNotificacionEstibadoresOperador(){
       snapshot: snapshot
     };
     try {
+      syncPushInFlight = true;
       setSyncStatus('Sincronizando cambios a la nube' + (reason ? ' (' + reason + ')' : '') + '...', 'ok');
       const response = await fetch(url, {
         method: 'POST',
@@ -6707,22 +6718,29 @@ function abrirNotificacionEstibadoresOperador(){
       }
       latestAppliedStamp = snapshot.updatedAt;
       window.__plantopsLastAppliedHash = hashSync(snapshot.data);
+      lastPushAt = Date.now();
       setSyncStatus('Cambios enviados correctamente a la nube.', 'ok');
       return true;
     } catch(err){
       console.error('Error enviando sincronización operativa', err);
       setSyncStatus('No se pudo enviar la sincronización operativa.', 'error');
       return false;
+    } finally {
+      syncPushInFlight = false;
     }
   }
   async function pullOperationalSnapshot(reason){
     if(applyingRemoteSnapshot) return false;
+    if(syncPullInFlight) return false;
+    const now = Date.now();
+    if(reason !== 'manual' && reason !== 'boot' && reason !== 'login' && reason !== 'focus' && (now - lastPullAt) < SYNC_PULL_DEBOUNCE_MS) return false;
     const url = getLiveSyncUrl('syncPullUrlInput', SYNC_PULL_KEY, SYNC_DEFAULT_PULL_URL);
     if(!url || !/^https?:/i.test(url)){
       if(reason === 'manual') setSyncStatus('Configura primero un webhook válido de lectura con &sig=...', 'warn');
       return false;
     }
     try {
+      syncPullInFlight = true;
       if(reason === 'manual') setSyncStatus('Consultando cambios en la nube...', 'ok');
       const response = await fetch(url, {
         method: 'POST',
@@ -6746,12 +6764,15 @@ function abrirNotificacionEstibadoresOperador(){
         return false;
       }
       const changed = applyOperationalSnapshot(payload);
+      lastPullAt = Date.now();
       if(reason === 'manual') setSyncStatus(changed ? 'Datos operativos cargados desde la nube.' : 'No había cambios nuevos en la nube.', changed ? 'ok' : 'warn');
       return changed;
     } catch(err){
       console.error('Error leyendo sincronización operativa', err);
       if(reason === 'manual') setSyncStatus('No se pudo leer la sincronización operativa.', 'error');
       return false;
+    } finally {
+      syncPullInFlight = false;
     }
   }
   function ensureRealtimeSyncPanel(){
@@ -6837,11 +6858,23 @@ function abrirNotificacionEstibadoresOperador(){
     wrapSaveFunction('guardarProduccionLocal', 'produccion');
     wrapSaveFunction('lanzarExportacionNube', 'exportacion');
   }
+  function stopRealtimeAutoPull(){
+    if(syncPollingHandle){
+      clearInterval(syncPollingHandle);
+      syncPollingHandle = null;
+    }
+  }
+  function startRealtimeAutoPull(){
+    if(document.hidden) return;
+    if(syncPollingHandle) return;
+    syncPollingHandle = setInterval(function(){
+      if(document.hidden) return;
+      pullOperationalSnapshot('auto');
+    }, SYNC_POLL_VISIBLE_MS);
+  }
   function startRealtimeSync(){
     installSaveHooks();
-    if(!syncPollingHandle){
-      syncPollingHandle = setInterval(function(){ pullOperationalSnapshot('auto'); }, 15000);
-    }
+    startRealtimeAutoPull();
     if(!syncStructureWatcher){
       localStructureHash = localStorage.getItem(STRUCTURE_KEY) || '';
       syncStructureWatcher = setInterval(function(){
@@ -6876,9 +6909,17 @@ function abrirNotificacionEstibadoresOperador(){
   window.pushOperationalSnapshotPlantOps = pushOperationalSnapshot;
 
   document.addEventListener('visibilitychange', function(){
-    if(!document.hidden) pullOperationalSnapshot('focus');
+    if(document.hidden){
+      stopRealtimeAutoPull();
+      return;
+    }
+    startRealtimeAutoPull();
+    pullOperationalSnapshot('focus');
   });
-  window.addEventListener('focus', function(){ pullOperationalSnapshot('focus'); });
+  window.addEventListener('focus', function(){
+    startRealtimeAutoPull();
+    pullOperationalSnapshot('focus');
+  });
   document.addEventListener('DOMContentLoaded', function(){
     const storedPush = String(localStorage.getItem(SYNC_PUSH_KEY) || '').trim();
     const storedPull = String(localStorage.getItem(SYNC_PULL_KEY) || '').trim();

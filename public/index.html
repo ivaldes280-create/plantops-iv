@@ -6596,31 +6596,9 @@ function abrirNotificacionEstibadoresOperador(){
       registrosFuente = Array.isArray(window.registros) ? window.registros : (Array.isArray(registros) ? registros : []);
     }
 
-    const registrosLocales = cloneSync(Array.isArray(registrosFuente) ? registrosFuente : []);
-    let registrosParaSync = cloneSync(registrosLocales);
     try {
-      if(typeof sanitizeRegistrosForStoragePlantOps === 'function'){
-        registrosParaSync = sanitizeRegistrosForStoragePlantOps(registrosParaSync);
-      } else {
-        registrosParaSync = (Array.isArray(registrosParaSync) ? registrosParaSync : []).map(function(reg){
-          if(!reg || typeof reg !== 'object') return reg;
-          const clean = Object.assign({}, reg);
-          if(typeof clean.fotoAntes === 'string' && (/^data:image\//i.test(clean.fotoAntes) || clean.fotoAntes.length > 180000)){
-            clean.fotoAntesPendiente = !clean.fotoAntesUrl;
-            delete clean.fotoAntes;
-          }
-          if(typeof clean.fotoDespues === 'string' && (/^data:image\//i.test(clean.fotoDespues) || clean.fotoDespues.length > 180000)){
-            clean.fotoDespuesPendiente = !clean.fotoDespuesUrl;
-            delete clean.fotoDespues;
-          }
-          return clean;
-        });
-      }
-    } catch(e){}
-
-    try {
-      window.registros = cloneSync(registrosLocales);
-      registros = cloneSync(registrosLocales);
+      window.registros = cloneSync(Array.isArray(registrosFuente) ? registrosFuente : []);
+      registros = cloneSync(Array.isArray(registrosFuente) ? registrosFuente : []);
       if(typeof persistCombinedToSeparatedStores === 'function') persistCombinedToSeparatedStores();
     } catch(e){}
     return {
@@ -6629,7 +6607,7 @@ function abrirNotificacionEstibadoresOperador(){
       updatedAt: new Date().toISOString(),
       deviceId: getDeviceId(),
       data: {
-        registros: registrosParaSync,
+        registros: cloneSync(Array.isArray(registrosFuente) ? registrosFuente : []),
         cierresDiarios: cloneSync(cierresDiarios || {}),
         ultimoCierreDia: ultimoCierreDia || '',
         accesosTermosellado: cloneSync(Array.isArray(accesosTermosellado) ? accesosTermosellado : []),

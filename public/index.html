@@ -3019,10 +3019,25 @@ function generarReporteTablaSemanal(areaFiltro, subarea, titulo, items, tipoFrec
   window.asegurarUidEnRegistros = asegurarUidEnRegistros;
   function syncCombinedRegistros(){
     const all = getAllActiveRecords();
-    window.registros = all;
-    try { registros = all; } catch(e){}
-    asegurarUidEnRegistros();
-    return all;
+    if(Array.isArray(all) && all.length){
+      window.registros = all;
+      try { registros = all; } catch(e){}
+      asegurarUidEnRegistros();
+      return all;
+    }
+    const existing = Array.isArray(window.registros) ? window.registros.slice() : (Array.isArray(registros) ? registros.slice() : []);
+    if(existing.length){
+      window.registros = existing;
+      try { registros = existing; } catch(e){}
+      asegurarUidEnRegistros();
+      ['diario','semanal','mensual'].forEach(freq => {
+        setActiveRecords(freq, existing.filter(r => normalizeFreq(r && r.frecuencia) === freq));
+      });
+      return existing;
+    }
+    window.registros = [];
+    try { registros = []; } catch(e){}
+    return [];
   }
   function persistCombinedToSeparatedStores(){
     asegurarUidEnRegistros();

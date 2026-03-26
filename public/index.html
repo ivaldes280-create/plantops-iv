@@ -6596,9 +6596,31 @@ function abrirNotificacionEstibadoresOperador(){
       registrosFuente = Array.isArray(window.registros) ? window.registros : (Array.isArray(registros) ? registros : []);
     }
 
+    const registrosLocales = cloneSync(Array.isArray(registrosFuente) ? registrosFuente : []);
+    let registrosParaSync = cloneSync(registrosLocales);
     try {
-      window.registros = cloneSync(Array.isArray(registrosFuente) ? registrosFuente : []);
-      registros = cloneSync(Array.isArray(registrosFuente) ? registrosFuente : []);
+      if(typeof sanitizeRegistrosForStoragePlantOps === 'function'){
+        registrosParaSync = sanitizeRegistrosForStoragePlantOps(registrosParaSync);
+      } else {
+        registrosParaSync = (Array.isArray(registrosParaSync) ? registrosParaSync : []).map(function(reg){
+          if(!reg || typeof reg !== 'object') return reg;
+          const clean = Object.assign({}, reg);
+          if(typeof clean.fotoAntes === 'string' && (/^data:image\//i.test(clean.fotoAntes) || clean.fotoAntes.length > 180000)){
+            clean.fotoAntesPendiente = !clean.fotoAntesUrl;
+            delete clean.fotoAntes;
+          }
+          if(typeof clean.fotoDespues === 'string' && (/^data:image\//i.test(clean.fotoDespues) || clean.fotoDespues.length > 180000)){
+            clean.fotoDespuesPendiente = !clean.fotoDespuesUrl;
+            delete clean.fotoDespues;
+          }
+          return clean;
+        });
+      }
+    } catch(e){}
+
+    try {
+      window.registros = cloneSync(registrosLocales);
+      registros = cloneSync(registrosLocales);
       if(typeof persistCombinedToSeparatedStores === 'function') persistCombinedToSeparatedStores();
     } catch(e){}
     return {
@@ -6607,7 +6629,7 @@ function abrirNotificacionEstibadoresOperador(){
       updatedAt: new Date().toISOString(),
       deviceId: getDeviceId(),
       data: {
-        registros: cloneSync(Array.isArray(registrosFuente) ? registrosFuente : []),
+        registros: registrosParaSync,
         cierresDiarios: cloneSync(cierresDiarios || {}),
         ultimoCierreDia: ultimoCierreDia || '',
         accesosTermosellado: cloneSync(Array.isArray(accesosTermosellado) ? accesosTermosellado : []),
@@ -6946,7 +6968,7 @@ function abrirNotificacionEstibadoresOperador(){
   function startRealtimeSync(){
     installSaveHooks();
     if(!syncPollingHandle){
-      syncPollingHandle = setInterval(function(){ pullOperationalSnapshot('auto'); }, 15000);
+      syncPollingHandle = setInterval(function(){ pullOperationalSnapshot(document.hidden ? 'auto_bg' : 'auto'); }, 5000);
     }
     if(!syncStructureWatcher){
       localStructureHash = localStorage.getItem(STRUCTURE_KEY) || '';
@@ -6980,6 +7002,10 @@ function abrirNotificacionEstibadoresOperador(){
 
   window.pullOperationalSnapshotPlantOps = pullOperationalSnapshot;
   window.pushOperationalSnapshotPlantOps = pushOperationalSnapshot;
+  window.triggerPlantOpsRealtimeSync = function(reason){
+    try { setTimeout(function(){ pushOperationalSnapshot(reason || 'manual_trigger'); }, 80); } catch(_){ }
+    try { setTimeout(function(){ pushOperationalSnapshot((reason || 'manual_trigger') + '_retry'); }, 1400); } catch(_){ }
+  };
 
   document.addEventListener('visibilitychange', function(){
     if(!document.hidden) pullOperationalSnapshot('focus');
@@ -7336,11 +7362,14 @@ function abrirNotificacionEstibadoresOperador(){
       currentRegistros.push(nuevoRegistro);
       safeSync();
       try{ if(typeof actualizarKPIs === 'function') actualizarKPIs(); }catch(_){ }
+      try{ if(typeof window.triggerPlantOpsRealtimeSync === 'function') window.triggerPlantOpsRealtimeSync('supervisor_guardado'); }catch(_){ }
       limpiarFormularioSupervisor(!!mantenerAbierto);
       mostrarEstadoGuardadoSupervisor(mantenerAbierto
         ? 'Registro guardado correctamente. La evidencia se seguirá cargando en segundo plano.'
         : 'Registro guardado correctamente.', 'ok');
-      Promise.resolve().then(() => window.procesarEvidenciasDeRegistro(nuevoRegistro)).catch(function(err){
+      Promise.resolve().then(() => window.procesarEvidenciasDeRegistro(nuevoRegistro)).then(function(){
+        try{ if(typeof window.triggerPlantOpsRealtimeSync === 'function') window.triggerPlantOpsRealtimeSync('evidencia_subida'); }catch(_){ }
+      }).catch(function(err){
         console.error(err);
         mostrarEstadoGuardadoSupervisor('El registro sí quedó guardado, pero la evidencia no pudo terminar de subirse en este intento.', 'error');
       });
@@ -7349,6 +7378,7 @@ function abrirNotificacionEstibadoresOperador(){
       }).then(function(result){
         if(result && result.ok){
           console.log('[REPORTE LIMPIEZA] Reporte automático enviado a la nube.');
+          try{ if(typeof window.triggerPlantOpsRealtimeSync === 'function') window.triggerPlantOpsRealtimeSync('reporte_automatico'); }catch(_){ }
         }
       }).catch(function(err){
         console.error('[REPORTE LIMPIEZA]', err);
@@ -7745,6 +7775,9 @@ function abrirNotificacionEstibadoresOperador(){
     const result = typeof originalGuardarActualizacionSupervisor_v7 === 'function'
       ? await originalGuardarActualizacionSupervisor_v7.apply(this, arguments)
       : false;
+    if(result){
+      try{ if(typeof window.triggerPlantOpsRealtimeSync === 'function') window.triggerPlantOpsRealtimeSync(mantenerAbierto ? 'supervisor_guardado_continuar' : 'supervisor_guardado_salir'); }catch(_){ }
+    }
     if(result && mantenerAbierto){
       const updated = captureState();
       if(updated.area) setTimeout(function(){

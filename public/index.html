@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CEDIH RC - Control de Operaciones</title>
+<link rel="icon" href="data:,">
 <style>
 :root{--b:#eef2f6;--c:#fff;--t:#1f2937;--m:#6b7280;--bd:#d7dde5;--s:0 8px 24px rgba(15,23,42,.08);--r:#c91f26;--rd:#a8181d;--sl:#2f3c4d;--sl2:#455468}
 *{box-sizing:border-box}body{margin:0;font-family:Arial,Helvetica,sans-serif;color:var(--t);background:linear-gradient(180deg,#f7f9fb 0%,#edf1f5 100%)}
@@ -3505,7 +3506,11 @@ function generarReporteTablaSemanal(areaFiltro, subarea, titulo, items, tipoFrec
       historial.appendChild(div);
     });
     if(!visibles.length){
-      historial.innerHTML = `<div class="entry"><b>Sin registros visibles</b><div class="small">En este submódulo solo se muestran registros de ${freq}. Los demás quedan guardados aparte.</div></div>`;
+      if(window.__plantopsCloudLoading){
+        historial.innerHTML = `<div class="entry"><b>Cargando registros desde la nube...</b><div class="small">Espere un momento mientras se completa la sincronización inicial.</div></div>`;
+      } else {
+        historial.innerHTML = `<div class="entry"><b>Sin registros visibles</b><div class="small">En este submódulo solo se muestran registros de ${freq}. Los demás quedan guardados aparte.</div></div>`;
+      }
     }
   };
 
@@ -6961,9 +6966,28 @@ function abrirNotificacionEstibadoresOperador(){
     const storedPull = String(localStorage.getItem(SYNC_PULL_KEY) || '').trim();
     if(storedPush && !isValidPowerAutomateWebhook(storedPush)) localStorage.removeItem(SYNC_PUSH_KEY);
     if(storedPull && !isValidPowerAutomateWebhook(storedPull)) localStorage.removeItem(SYNC_PULL_KEY);
+    window.__plantopsCloudLoading = true;
     startRealtimeSync();
     setTimeout(ensureRealtimeSyncPanel, 200);
-    setTimeout(function(){ pullOperationalSnapshot('boot'); }, 1200);
+
+    const finalizeBootSync = function(){
+      window.__plantopsCloudLoading = false;
+      try { if(typeof renderHistorial === 'function') renderHistorial(); } catch(_){}
+      try { if(typeof actualizarKPIs === 'function') actualizarKPIs(); } catch(_){}
+    };
+
+    setTimeout(async function(){
+      try {
+        await pullOperationalSnapshot('boot');
+        try { if(typeof renderHistorial === 'function') renderHistorial(); } catch(_){}
+        const hayRegistros = Array.isArray(window.registros) && window.registros.length > 0;
+        if(!hayRegistros){
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          await pullOperationalSnapshot('boot');
+        }
+      } catch(_){}
+      finalizeBootSync();
+    }, 1200);
   });
 })();
 

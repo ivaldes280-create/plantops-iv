@@ -6548,6 +6548,14 @@ function abrirNotificacionEstibadoresOperador(){
   let applyingRemoteSnapshot = false;
   let localStructureHash = '';
   let latestAppliedStamp = '';
+  let pushInFlight = false;
+  let pushQueued = false;
+  let pushQueueTimer = null;
+  let queuedPushReason = '';
+  let lastPushedHash = '';
+  let lastPushedStamp = '';
+  let lastPushAttemptAt = 0;
+  const PUSH_MIN_INTERVAL_MS = 900;
 
   function byIdSync(id){ return document.getElementById(id); }
   function cloneSync(obj){
@@ -6557,6 +6565,11 @@ function abrirNotificacionEstibadoresOperador(){
   function hashSync(obj){
     try { return JSON.stringify(obj || {}); }
     catch(e){ return String(Date.now()); }
+  }
+  function toStampValue(value){
+    if(!value) return 0;
+    const ms = Date.parse(value);
+    return Number.isFinite(ms) ? ms : 0;
   }
   function getDeviceId(){
     let id = localStorage.getItem(SYNC_DEVICE_KEY);
@@ -6738,6 +6751,11 @@ function abrirNotificacionEstibadoresOperador(){
     if(!normalized || !normalized.data) return false;
     const stamp = normalized.updatedAt || '';
     const incomingHash = hashSync(normalized.data);
+    const incomingStampValue = toStampValue(stamp);
+    const latestStampValue = toStampValue(latestAppliedStamp);
+    if(stamp && latestAppliedStamp && incomingStampValue && latestStampValue && incomingStampValue < latestStampValue){
+      return false;
+    }
     if(stamp && latestAppliedStamp && stamp === latestAppliedStamp && incomingHash === (window.__plantopsLastAppliedHash || '')) return false;
     applyingRemoteSnapshot = true;
     try {
@@ -6801,15 +6819,58 @@ function abrirNotificacionEstibadoresOperador(){
     }
     return getSyncUrl(key, fallback);
   }
-  async function pushOperationalSnapshot(reason){
+  async function pushOperationalSnapshot(reason, options){
+    const opts = options && typeof options === 'object' ? options : {};
     if(applyingRemoteSnapshot) return false;
+    const force = !!opts.force;
+    const delay = typeof opts.delay === 'number' ? opts.delay : 220;
+    const immediate = !!opts.immediate;
+    queuedPushReason = reason || queuedPushReason || 'auto';
+
+    if(!immediate){
+      pushQueued = true;
+      if(pushQueueTimer) clearTimeout(pushQueueTimer);
+      pushQueueTimer = setTimeout(function(){
+        pushQueueTimer = null;
+        pushOperationalSnapshot(queuedPushReason || reason || 'auto', Object.assign({}, opts, { immediate:true }));
+      }, Math.max(0, delay));
+      return true;
+    }
+
+    if(pushInFlight){
+      pushQueued = true;
+      return true;
+    }
+
     const url = getLiveSyncUrl('syncPushUrlInput', SYNC_PUSH_KEY, SYNC_DEFAULT_PUSH_URL);
     if(!url || !/^https?:/i.test(url)){
       if(reason === 'manual') setSyncStatus('Configura primero un webhook válido de guardado con &sig=...', 'warn');
       return false;
     }
+
     const snapshot = buildOperationalSnapshot();
+    const snapshotHash = hashSync(snapshot.data);
+    const nowMs = Date.now();
+    const elapsed = nowMs - lastPushAttemptAt;
+
+    if(!force && snapshotHash === lastPushedHash){
+      return true;
+    }
+    if(!force && elapsed >= 0 && elapsed < PUSH_MIN_INTERVAL_MS){
+      pushQueued = true;
+      if(pushQueueTimer) clearTimeout(pushQueueTimer);
+      pushQueueTimer = setTimeout(function(){
+        pushQueueTimer = null;
+        pushOperationalSnapshot(queuedPushReason || reason || 'auto', { immediate:true, force:false });
+      }, PUSH_MIN_INTERVAL_MS - elapsed + 40);
+      return true;
+    }
+
     const envelope = snapshot;
+    pushInFlight = true;
+    pushQueued = false;
+    queuedPushReason = '';
+    lastPushAttemptAt = nowMs;
     try {
       setSyncStatus('Sincronizando cambios a la nube' + (reason ? ' (' + reason + ')' : '') + '...', 'ok');
       const response = await fetch(url, {
@@ -6829,13 +6890,24 @@ function abrirNotificacionEstibadoresOperador(){
         return false;
       }
       latestAppliedStamp = snapshot.updatedAt;
-      window.__plantopsLastAppliedHash = hashSync(snapshot.data);
+      lastPushedStamp = snapshot.updatedAt;
+      lastPushedHash = snapshotHash;
+      window.__plantopsLastAppliedHash = snapshotHash;
       setSyncStatus('Cambios enviados correctamente a la nube.', 'ok');
       return true;
     } catch(err){
       console.error('Error enviando sincronización operativa', err);
       setSyncStatus('No se pudo enviar la sincronización operativa.', 'error');
       return false;
+    } finally {
+      pushInFlight = false;
+      if(pushQueued){
+        if(pushQueueTimer) clearTimeout(pushQueueTimer);
+        pushQueueTimer = setTimeout(function(){
+          pushQueueTimer = null;
+          pushOperationalSnapshot(queuedPushReason || reason || 'auto', { immediate:true });
+        }, 180);
+      }
     }
   }
   async function pullOperationalSnapshot(reason){
@@ -6947,14 +7019,14 @@ function abrirNotificacionEstibadoresOperador(){
       setSyncStatus('Configuración guardada. Webhooks de base central listos para usar.', 'ok');
     });
     byIdSync('btnLeerSyncAhora')?.addEventListener('click', function(){ pullOperationalSnapshot('manual'); });
-    byIdSync('btnEnviarSyncAhora')?.addEventListener('click', function(){ pushOperationalSnapshot('manual'); });
+    byIdSync('btnEnviarSyncAhora')?.addEventListener('click', function(){ pushOperationalSnapshot('manual', { immediate:true, force:true }); });
   }
   function wrapSaveFunction(name, reason){
     if(typeof window[name] !== 'function' || window[name]._plantopsCloudSyncWrapped) return;
     const original = window[name];
     const wrapped = function(){
       const result = original.apply(this, arguments);
-      setTimeout(function(){ pushOperationalSnapshot(reason); }, 250);
+      pushOperationalSnapshot(reason, { delay: 260 });
       return result;
     };
     wrapped._plantopsCloudSyncWrapped = true;
@@ -6968,7 +7040,7 @@ function abrirNotificacionEstibadoresOperador(){
   function startRealtimeSync(){
     installSaveHooks();
     if(!syncPollingHandle){
-      syncPollingHandle = setInterval(function(){ pullOperationalSnapshot(document.hidden ? 'auto_bg' : 'auto'); }, 5000);
+      syncPollingHandle = setInterval(function(){ pullOperationalSnapshot(document.hidden ? 'auto_bg' : 'auto'); }, 12000);
     }
     if(!syncStructureWatcher){
       localStructureHash = localStorage.getItem(STRUCTURE_KEY) || '';
@@ -6976,7 +7048,7 @@ function abrirNotificacionEstibadoresOperador(){
         const current = localStorage.getItem(STRUCTURE_KEY) || '';
         if(current !== localStructureHash){
           localStructureHash = current;
-          pushOperationalSnapshot('estructura');
+          pushOperationalSnapshot('estructura', { delay: 420 });
         }
       }, 3000);
     }
@@ -7003,8 +7075,7 @@ function abrirNotificacionEstibadoresOperador(){
   window.pullOperationalSnapshotPlantOps = pullOperationalSnapshot;
   window.pushOperationalSnapshotPlantOps = pushOperationalSnapshot;
   window.triggerPlantOpsRealtimeSync = function(reason){
-    try { setTimeout(function(){ pushOperationalSnapshot(reason || 'manual_trigger'); }, 80); } catch(_){ }
-    try { setTimeout(function(){ pushOperationalSnapshot((reason || 'manual_trigger') + '_retry'); }, 1400); } catch(_){ }
+    try { return pushOperationalSnapshot(reason || 'manual_trigger', { delay: 260 }); } catch(_){ return false; }
   };
 
   document.addEventListener('visibilitychange', function(){

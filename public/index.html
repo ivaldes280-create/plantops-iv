@@ -4905,17 +4905,40 @@ function abrirNotificacionEstibadoresOperador(){
     document.getElementById('itemsSupervisorBox')?.classList.add('hidden');
   });
 
-  window.cargarSubareasSupervisor = function(){
-    const area = document.getElementById('areaPrincipalSupervisor')?.value;
-    const sub = document.getElementById('subareaSupervisor');
-    if (!sub) return;
+  window.cargarSubareasSupervisor = function(subareaPreferida){
+    const areaSel = document.getElementById('areaPrincipalSupervisor');
+    const subSel = document.getElementById('subareaSupervisor');
+    if (!subSel) return;
+
+    const area = areaSel?.value || window.__plantopsSupervisorAreaActual || '';
+    const previa = subareaPreferida || subSel.value || window.__plantopsSupervisorSubareaActual || '';
     const struct = getStructByFreq(getFrecuenciaActiva());
-    sub.innerHTML = '<option value="">Seleccione una subárea</option>';
+
+    subSel.innerHTML = '<option value="">Seleccione una subárea</option>';
     document.getElementById('itemsSupervisorBox')?.classList.add('hidden');
-    if(!area || !struct[area]) return;
-    Object.keys(struct[area]).forEach(nombre => {
-      const opt = document.createElement('option'); opt.value = nombre; opt.textContent = nombre; sub.appendChild(opt);
+
+    if(!area || !struct[area]) {
+      window.__plantopsSupervisorAreaActual = area || '';
+      window.__plantopsSupervisorSubareaActual = '';
+      return;
+    }
+
+    const disponibles = Object.keys(struct[area]);
+    disponibles.forEach(nombre => {
+      const opt = document.createElement('option');
+      opt.value = nombre;
+      opt.textContent = nombre;
+      subSel.appendChild(opt);
     });
+
+    if(previa && disponibles.includes(previa)) {
+      subSel.value = previa;
+      window.__plantopsSupervisorSubareaActual = previa;
+      if(typeof window.mostrarItemsSupervisor === 'function') window.mostrarItemsSupervisor();
+    } else {
+      window.__plantopsSupervisorSubareaActual = subSel.value || '';
+    }
+    window.__plantopsSupervisorAreaActual = area;
   };
   window.mostrarItemsSupervisor = function(){
     const area = document.getElementById('areaPrincipalSupervisor')?.value;
@@ -7205,6 +7228,8 @@ function abrirNotificacionEstibadoresOperador(){
     if(document.getElementById('itemsSupervisorBox')) document.getElementById('itemsSupervisorBox').classList.add('hidden');
     window.fotoAntesBase64_super = '';
     window.fotoDespuesBase64_super = '';
+    if(!mantenerAbierto) window.__plantopsSupervisorAreaActual = '';
+    window.__plantopsSupervisorSubareaActual = '';
     const inputAntes = document.getElementById('fotoAntesSupervisor');
     const inputDesp = document.getElementById('fotoDespuesSupervisor');
     if(inputAntes) inputAntes.value = '';
@@ -7265,10 +7290,19 @@ function abrirNotificacionEstibadoresOperador(){
     });
   }
 
+
+  document.getElementById('areaPrincipalSupervisor')?.addEventListener('change', function(){
+    window.__plantopsSupervisorAreaActual = this.value || '';
+    window.__plantopsSupervisorSubareaActual = '';
+  });
+  document.getElementById('subareaSupervisor')?.addEventListener('change', function(){
+    window.__plantopsSupervisorSubareaActual = this.value || '';
+  });
+
   window.guardarActualizacionSupervisor = async function(mantenerAbierto){
     try{ if(typeof syncCombinedRegistros === 'function') syncCombinedRegistros(); }catch(_){}
-    const area = document.getElementById('areaPrincipalSupervisor')?.value || '';
-    const sub = document.getElementById('subareaSupervisor')?.value || '';
+    const area = document.getElementById('areaPrincipalSupervisor')?.value || window.__plantopsSupervisorAreaActual || '';
+    const sub = document.getElementById('subareaSupervisor')?.value || window.__plantopsSupervisorSubareaActual || '';
     const obs = document.getElementById('obsSupervisor')?.value || '';
     const fotoAntes = window.fotoAntesBase64_super || '';
     const fotoDespues = window.fotoDespuesBase64_super || '';

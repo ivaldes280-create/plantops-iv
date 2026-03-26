@@ -7632,4 +7632,158 @@ function abrirNotificacionEstibadoresOperador(){
 </script>
 
 
+
+<script>
+(function(){
+  const KEY = 'plantops_supervisor_form_state_v7';
+  function byId(id){ return document.getElementById(id); }
+  function getState(){
+    try{ return JSON.parse(sessionStorage.getItem(KEY) || '{}') || {}; }catch(_){ return {}; }
+  }
+  function setState(next){
+    const cur = getState();
+    const merged = Object.assign({}, cur, next || {});
+    try{ sessionStorage.setItem(KEY, JSON.stringify(merged)); }catch(_){ }
+    window.__plantopsSupervisorAreaActual = merged.area || '';
+    window.__plantopsSupervisorSubareaActual = merged.subarea || '';
+    window.__plantopsSupervisorFreqActual = merged.frecuencia || '';
+    return merged;
+  }
+  function captureState(){
+    const area = byId('areaPrincipalSupervisor')?.value || window.__plantopsSupervisorAreaActual || '';
+    const subarea = byId('subareaSupervisor')?.value || window.__plantopsSupervisorSubareaActual || '';
+    const frecuencia = byId('frecuenciaSupervisor')?.value || window.__plantopsSupervisorFreqActual || window.currentCleaningModule || '';
+    return setState({ area, subarea, frecuencia, ts: Date.now() });
+  }
+  function getValidSubareas(area){
+    try{
+      if(typeof window.getSubareasForModule === 'function') return window.getSubareasForModule(area) || [];
+      if(typeof window.getStructByFreq === 'function'){
+        const freq = byId('frecuenciaSupervisor')?.value || window.__plantopsSupervisorFreqActual || window.currentCleaningModule || 'diario';
+        const struct = window.getStructByFreq(freq) || {};
+        return struct[area] ? Object.keys(struct[area]) : [];
+      }
+    }catch(_){ }
+    try{
+      const base = window.estructuraLimpieza || {};
+      return base[area] ? Object.keys(base[area]) : [];
+    }catch(_){ return []; }
+  }
+  function ensureSubOption(sel, value){
+    if(!sel || !value) return;
+    const exists = Array.from(sel.options || []).some(o => String(o.value) === String(value));
+    if(!exists){
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = value;
+      sel.appendChild(opt);
+    }
+  }
+  function restoreState(){
+    const areaSel = byId('areaPrincipalSupervisor');
+    const subSel = byId('subareaSupervisor');
+    const freqSel = byId('frecuenciaSupervisor');
+    if(!areaSel || !subSel) return;
+    const st = getState();
+    const area = areaSel.value || st.area || window.__plantopsSupervisorAreaActual || '';
+    const sub = subSel.value || st.subarea || window.__plantopsSupervisorSubareaActual || '';
+    const freq = freqSel?.value || st.frecuencia || window.__plantopsSupervisorFreqActual || window.currentCleaningModule || '';
+    if(freqSel && freq && !freqSel.value) freqSel.value = freq;
+    if(area && areaSel.value !== area) areaSel.value = area;
+    const validSubs = getValidSubareas(area);
+    if(area && validSubs.length){
+      const hasOptions = Array.from(subSel.options || []).some(o => o.value && validSubs.includes(o.value));
+      if(!hasOptions && typeof window.cargarSubareasSupervisor === 'function'){
+        try{ window.cargarSubareasSupervisor(); }catch(_){ }
+      }
+    }
+    if(sub){
+      ensureSubOption(subSel, sub);
+      subSel.value = sub;
+    }
+    if(area && sub && typeof window.mostrarItemsSupervisor === 'function'){
+      try{ window.mostrarItemsSupervisor(); }catch(_){ }
+    }
+    setState({ area: areaSel.value || area, subarea: subSel.value || sub, frecuencia: freqSel?.value || freq, ts: Date.now() });
+  }
+
+  const originalCargarSubareasSupervisor_v7 = window.cargarSubareasSupervisor;
+  window.cargarSubareasSupervisor = function(){
+    const areaSel = byId('areaPrincipalSupervisor');
+    const subSel = byId('subareaSupervisor');
+    const st = getState();
+    const areaAntes = areaSel?.value || st.area || window.__plantopsSupervisorAreaActual || '';
+    const subAntes = subSel?.value || st.subarea || window.__plantopsSupervisorSubareaActual || '';
+    const out = typeof originalCargarSubareasSupervisor_v7 === 'function'
+      ? originalCargarSubareasSupervisor_v7.apply(this, arguments)
+      : undefined;
+    const areaDespues = areaSel?.value || areaAntes;
+    const validSubs = getValidSubareas(areaDespues);
+    if(subSel && subAntes && validSubs.includes(subAntes)){
+      ensureSubOption(subSel, subAntes);
+      subSel.value = subAntes;
+    }
+    captureState();
+    return out;
+  };
+
+  const originalGuardarActualizacionSupervisor_v7 = window.guardarActualizacionSupervisor;
+  window.guardarActualizacionSupervisor = async function(mantenerAbierto){
+    restoreState();
+    const areaSel = byId('areaPrincipalSupervisor');
+    const subSel = byId('subareaSupervisor');
+    const st = getState();
+    const area = areaSel?.value || st.area || window.__plantopsSupervisorAreaActual || '';
+    const sub = subSel?.value || st.subarea || window.__plantopsSupervisorSubareaActual || '';
+    if(areaSel && !areaSel.value && area) areaSel.value = area;
+    if(subSel && !subSel.value && sub){
+      ensureSubOption(subSel, sub);
+      subSel.value = sub;
+    }
+    captureState();
+    const result = typeof originalGuardarActualizacionSupervisor_v7 === 'function'
+      ? await originalGuardarActualizacionSupervisor_v7.apply(this, arguments)
+      : false;
+    if(result && mantenerAbierto){
+      const updated = captureState();
+      if(updated.area) setTimeout(function(){
+        try{
+          const areaControl = byId('areaPrincipalSupervisor');
+          if(areaControl && !areaControl.value) areaControl.value = updated.area;
+          if(typeof window.cargarSubareasSupervisor === 'function') window.cargarSubareasSupervisor();
+          const subControl = byId('subareaSupervisor');
+          if(subControl) subControl.value = '';
+          setState({ area: updated.area, subarea: '', frecuencia: updated.frecuencia || (byId('frecuenciaSupervisor')?.value || '') , ts: Date.now() });
+        }catch(_){ }
+      }, 30);
+    }
+    if(result && !mantenerAbierto){
+      try{ sessionStorage.removeItem(KEY); }catch(_){ }
+      window.__plantopsSupervisorAreaActual = '';
+      window.__plantopsSupervisorSubareaActual = '';
+      window.__plantopsSupervisorFreqActual = '';
+    }
+    return result;
+  };
+
+  ['areaPrincipalSupervisor','subareaSupervisor','frecuenciaSupervisor'].forEach(function(id){
+    document.addEventListener('change', function(ev){
+      if(ev.target && ev.target.id === id){ captureState(); }
+    }, true);
+  });
+  ['fotoAntesSupervisor','fotoDespuesSupervisor'].forEach(function(id){
+    document.addEventListener('click', function(ev){
+      if(ev.target && ev.target.id === id) captureState();
+    }, true);
+    document.addEventListener('change', function(ev){
+      if(ev.target && ev.target.id === id){ captureState(); setTimeout(restoreState, 120); setTimeout(restoreState, 700); }
+    }, true);
+  });
+  document.addEventListener('visibilitychange', function(){ if(!document.hidden){ setTimeout(restoreState, 80); setTimeout(restoreState, 500); } });
+  window.addEventListener('focus', function(){ setTimeout(restoreState, 80); setTimeout(restoreState, 500); });
+  window.addEventListener('pageshow', function(){ setTimeout(restoreState, 80); setTimeout(restoreState, 500); });
+  document.addEventListener('DOMContentLoaded', function(){ setTimeout(restoreState, 150); });
+})();
+</script>
+
 </body></html>

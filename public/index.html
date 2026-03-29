@@ -971,29 +971,7 @@ function migrateImagePayloadsOutOfLocalStoragePlantOps(){
 migrateImagePayloadsOutOfLocalStoragePlantOps();
 
 function guardarLimpiezaLocal(){
-  // Read-Modify-Write pattern for concurrency
-  try {
-      const storageActual = localStorage.getItem("limpieza_registros_v3");
-      if(storageActual) {
-          const registrosEnDisco = JSON.parse(storageActual);
-          
-          // Buscar diferencias: registros nuevos que nosotros tenemos pero disco no, o viceversa
-          // Para simplificar sin IDs únicos, asumimos que siempre anexamos al final en un entorno vivo.
-          // Estrategia segura: Si nosotros agregamos algo desde la última lectura, unimos nuestro(s) último(s) registro(s) 
-          // a la versión más reciente del disco. (Solo aplicable si en esta sesión se "empujó" a `registros`)
-          if(registros.length > 0 && registrosEnDisco.length > 0) {
-             const misNuevos = registros.filter(rLocal => 
-                !registrosEnDisco.some(rDisco => 
-                    rDisco.fecha === rLocal.fecha && rDisco.usuario === rLocal.usuario && rDisco.subarea === rLocal.subarea
-                )
-             );
-             registros = [...registrosEnDisco, ...misNuevos];
-          } else if (registros.length === 0 && registrosEnDisco.length > 0) {
-             registros = registrosEnDisco;
-          }
-      }
-  } catch (e) { console.error("Error uniendo datos:", e); }
-
+  try { if(typeof persistCombinedToSeparatedStores === 'function') persistCombinedToSeparatedStores(); } catch(e){}
   writeRegistrosToStoragePlantOps(registros);
   localStorage.setItem("limpieza_cierres_diarios_v1", JSON.stringify(cierresDiarios));
   localStorage.setItem("limpieza_ultimo_cierre_dia_v1", ultimoCierreDia || "");
@@ -6653,10 +6631,16 @@ function abrirNotificacionEstibadoresOperador(){
       registros = cloneSync(registrosLocales);
       if(typeof persistCombinedToSeparatedStores === 'function') persistCombinedToSeparatedStores();
     } catch(e){}
+    let newTs = new Date().getTime();
+    const lastApplied = window.__plantopsLastAppliedStamp ? new Date(window.__plantopsLastAppliedStamp).getTime() : 0;
+    if (newTs <= lastApplied) {
+       newTs = lastApplied + 1;
+    }
+
     return {
       kind: 'PlantOpsRealtimeSync',
       schemaVersion: 2,
-      updatedAt: new Date().toISOString(),
+      updatedAt: new Date(newTs).toISOString(),
       deviceId: getDeviceId(),
       data: {
         registros: registrosParaSync,

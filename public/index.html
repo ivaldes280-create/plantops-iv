@@ -2615,13 +2615,7 @@ function guardarRegistroOperario(){
   }
 }
 
-function eliminarRegistro(index){
-  if(!confirm("¿Está seguro de eliminar este registro?")) return;
-  registros.splice(index, 1);
-  guardarLimpiezaLocal();
-  actualizarKPIs();
-  renderHistorial();
-}
+
 
 function renderHistorial(){
   const historial=document.getElementById("historial");
@@ -6746,17 +6740,15 @@ function abrirNotificacionEstibadoresOperador(){
     }
     return null;
   }
-  function applyOperationalSnapshot(snapshot){
+  function applyOperationalSnapshot(snapshot, { force = false } = {}){
     const normalized = normalizePulledSnapshot(snapshot);
     if(!normalized || !normalized.data) return false;
-    const stamp = normalized.updatedAt || '';
-    const incomingHash = hashSync(normalized.data);
-    const incomingStampValue = toStampValue(stamp);
-    const latestStampValue = toStampValue(latestAppliedStamp);
-    if(stamp && latestAppliedStamp && incomingStampValue && latestStampValue && incomingStampValue < latestStampValue){
+    const remoteTs = normalized.updatedAt ? new Date(normalized.updatedAt).getTime() : 0;
+    const localTs = window.__plantopsLastAppliedStamp ? new Date(window.__plantopsLastAppliedStamp).getTime() : 0;
+    
+    if(!force && remoteTs <= localTs) {
       return false;
     }
-    if(stamp && latestAppliedStamp && stamp === latestAppliedStamp && incomingHash === (window.__plantopsLastAppliedHash || '')) return false;
     applyingRemoteSnapshot = true;
     try {
       registros = cloneSync(Array.isArray(normalized.data.registros) ? normalized.data.registros : []);
@@ -6784,8 +6776,9 @@ function abrirNotificacionEstibadoresOperador(){
       localStorage.setItem('movimientos_estibadores_v2', JSON.stringify(movimientosEstibadores));
       localStorage.setItem('resultados_termosellado_v2', JSON.stringify(resultadosTermosellado));
       if(normalized.data.estructuraLimpieza) applyStructureSnapshot(normalized.data.estructuraLimpieza);
-      window.__plantopsLastAppliedHash = incomingHash;
-      latestAppliedStamp = stamp;
+      window.__plantopsLastAppliedHash = hashSync(normalized.data);
+      latestAppliedStamp = normalized.updatedAt || '';
+      window.__plantopsLastAppliedStamp = normalized.updatedAt || '';
       localStructureHash = localStorage.getItem(STRUCTURE_KEY) || '';
       refreshAllViewsAfterSync();
       return true;
@@ -6893,6 +6886,7 @@ function abrirNotificacionEstibadoresOperador(){
       lastPushedStamp = snapshot.updatedAt;
       lastPushedHash = snapshotHash;
       window.__plantopsLastAppliedHash = snapshotHash;
+      window.__plantopsLastAppliedStamp = snapshot.updatedAt;
       setSyncStatus('Cambios enviados correctamente a la nube.', 'ok');
       return true;
     } catch(err){
@@ -6938,7 +6932,7 @@ function abrirNotificacionEstibadoresOperador(){
       try { payload = JSON.parse(text); }
       catch(_) { payload = text; }
       const normalized = normalizePulledSnapshot(payload);
-      const changed = applyOperationalSnapshot(payload);
+      const changed = applyOperationalSnapshot(payload, { force: reason === 'manual' });
       if(!normalized){ console.warn('Lectura operativa recibida pero no reconocida:', payload); }
       if(reason === 'manual'){
         if(!normalized){

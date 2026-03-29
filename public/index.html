@@ -782,14 +782,37 @@ let sesionActivaColaborador = false;
 let pendientesSesionOperador = [];
 let currentIndexPendiente = 0;
 
-let registros = JSON.parse(localStorage.getItem("limpieza_registros_v3") || "[]");
-let accesosTermosellado = JSON.parse(localStorage.getItem("accesos_termosellado_v1") || "[]");
-let accesosEstibadores = JSON.parse(localStorage.getItem("accesos_estibadores_v1") || "[]");
-let programacionesTermosellado = JSON.parse(localStorage.getItem("programaciones_termosellado_v2") || "[]");
-let movimientosEstibadores = JSON.parse(localStorage.getItem("movimientos_estibadores_v2") || "[]");
-let resultadosTermosellado = JSON.parse(localStorage.getItem("resultados_termosellado_v2") || "[]");
-let cierresDiarios = JSON.parse(localStorage.getItem("limpieza_cierres_diarios_v1") || "{}");
-let ultimoCierreDia = localStorage.getItem("limpieza_ultimo_cierre_dia_v1") || "";
+let registros = [];
+let accesosTermosellado = [];
+let accesosEstibadores = [];
+let programacionesTermosellado = [];
+let movimientosEstibadores = [];
+let resultadosTermosellado = [];
+let cierresDiarios = {};
+let ultimoCierreDia = "";
+
+window.cleanOldStorageKeys = function() {
+    try {
+        ['limpieza_registros', 'limpieza_registros_v2', 'limpieza_cierres_diarios', 
+         'accesos_termosellado', 'programaciones_termosellado', 'movimientos_estibadores'].forEach(function(k){
+            localStorage.removeItem(k);
+        });
+    } catch(e) {}
+};
+
+window.hydrateFromLocalStorage = function() {
+    try {
+        registros = JSON.parse(localStorage.getItem("limpieza_registros_v3") || "[]");
+        window.registros = typeof cloneSync === 'function' ? cloneSync(registros) : registros.slice();
+        accesosTermosellado = JSON.parse(localStorage.getItem("accesos_termosellado_v1") || "[]");
+        accesosEstibadores = JSON.parse(localStorage.getItem("accesos_estibadores_v1") || "[]");
+        programacionesTermosellado = JSON.parse(localStorage.getItem("programaciones_termosellado_v2") || "[]");
+        movimientosEstibadores = JSON.parse(localStorage.getItem("movimientos_estibadores_v2") || "[]");
+        resultadosTermosellado = JSON.parse(localStorage.getItem("resultados_termosellado_v2") || "[]");
+        cierresDiarios = JSON.parse(localStorage.getItem("limpieza_cierres_diarios_v1") || "{}");
+        ultimoCierreDia = localStorage.getItem("limpieza_ultimo_cierre_dia_v1") || "";
+    } catch(e) { console.error('Error hydrating cache', e); }
+};
 
 function cargarListasAccesoProduccion() {
   sincronizarCatalogoPersonal();
@@ -7076,33 +7099,37 @@ function abrirNotificacionEstibadoresOperador(){
     if(!document.hidden) pullOperationalSnapshot('focus');
   });
   window.addEventListener('focus', function(){ pullOperationalSnapshot('focus'); });
-  document.addEventListener('DOMContentLoaded', function(){
+  document.addEventListener('DOMContentLoaded', async function(){
+    if(typeof cleanOldStorageKeys === 'function') cleanOldStorageKeys();
+    
     const storedPush = String(localStorage.getItem(SYNC_PUSH_KEY) || '').trim();
     const storedPull = String(localStorage.getItem(SYNC_PULL_KEY) || '').trim();
     if(storedPush && !isValidPowerAutomateWebhook(storedPush)) localStorage.removeItem(SYNC_PUSH_KEY);
     if(storedPull && !isValidPowerAutomateWebhook(storedPull)) localStorage.removeItem(SYNC_PULL_KEY);
+    
     window.__plantopsCloudLoading = true;
     startRealtimeSync();
     setTimeout(ensureRealtimeSyncPanel, 200);
 
-    const finalizeBootSync = function(){
-      window.__plantopsCloudLoading = false;
-      try { if(typeof renderHistorial === 'function') renderHistorial(); } catch(_){}
-      try { if(typeof actualizarKPIs === 'function') actualizarKPIs(); } catch(_){}
-    };
-
-    setTimeout(async function(){
+    let successCloud = false;
+    const currentPullUrl = typeof getLiveSyncUrl === 'function' ? getLiveSyncUrl('syncPullUrlInput', SYNC_PULL_KEY, SYNC_DEFAULT_PULL_URL) : storedPull;
+    
+    if(currentPullUrl && /^https?:/i.test(currentPullUrl)) {
+      setSyncStatus('Iniciando lectura obligatoria desde nube...', 'warn');
       try {
-        await pullOperationalSnapshot('boot');
-        try { if(typeof renderHistorial === 'function') renderHistorial(); } catch(_){}
-        const hayRegistros = Array.isArray(window.registros) && window.registros.length > 0;
-        if(!hayRegistros){
-          await new Promise(resolve => setTimeout(resolve, 1500));
-          await pullOperationalSnapshot('boot');
-        }
-      } catch(_){}
-      finalizeBootSync();
-    }, 1200);
+        successCloud = await pullOperationalSnapshot('boot');
+      } catch(e) { console.error('Error pre-boot nube', e); }
+    }
+
+    if(!successCloud) {
+       setSyncStatus('Falló conexión nube o no hay datos: usando respaldo local.', 'warn');
+       if(typeof hydrateFromLocalStorage === 'function') hydrateFromLocalStorage();
+    }
+
+    window.__plantopsCloudLoading = false;
+    try { if(typeof refreshAllViewsAfterSync === 'function') refreshAllViewsAfterSync(); } catch(_){}
+    try { if(typeof renderHistorial === 'function') renderHistorial(); } catch(_){}
+    try { if(typeof actualizarKPIs === 'function') actualizarKPIs(); } catch(_){}
   });
 })();
 

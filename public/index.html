@@ -6657,6 +6657,64 @@ function abrirNotificacionEstibadoresOperador(){
     };
   }
 
+  function splitItemsFromRemoteValue(value){
+    if(Array.isArray(value)){
+      return value.map(function(v){ return String(v == null ? '' : v).trim(); }).filter(Boolean);
+    }
+    if(value == null) return [];
+    const raw = String(value).trim();
+    if(!raw) return [];
+    if(raw[0] === '[' && raw[raw.length - 1] === ']'){
+      try {
+        const parsed = JSON.parse(raw);
+        if(Array.isArray(parsed)) return parsed.map(function(v){ return String(v == null ? '' : v).trim(); }).filter(Boolean);
+      } catch(_){ }
+    }
+    return raw.split('|').map(function(v){ return String(v == null ? '' : v).trim(); }).filter(Boolean);
+  }
+  function normalizeRemoteRegistroForPlantOps(registro, index){
+    if(!registro || typeof registro !== 'object') return null;
+    const raw = cloneSync(registro);
+    const areaPrincipal = raw.areaPrincipal || raw.AreaPrincipal || raw.area || raw.Title || raw.Titulo || '';
+    const subarea = raw.subarea || raw.subArea || raw.SubArea || '';
+    const frecuencia = raw.frecuencia || raw.Frecuencia || raw.frecuenciaValue || raw['Frecuencia Value'] || raw.frecuencia_value || '';
+    const observacion = raw.observacion || raw.observaciones || raw.Observaciones || '';
+    const itemRaw = raw.item || raw.Item || raw.items || raw.Items || raw.itemsUnicosAportados || raw.itemsRescatados || '';
+    const items = splitItemsFromRemoteValue(itemRaw);
+    const empleado = raw.empleado || raw.Empleado || raw.usuario || raw.Usuario || '';
+    const estado = raw.estado || raw.Estado || raw.estadoCaptura || raw['Rol Value'] || raw.rolValue || raw.RolValue || '';
+    const rol = raw.rol || raw.Rol || '';
+    const fechaISO = raw.fechaISO || raw.fechaRegistro || raw.FechaRegistro || raw.Created || raw.created || raw.fecha || '';
+    const fechaVisible = raw.fecha || raw.Fecha || (fechaISO ? new Date(fechaISO).toLocaleString() : '');
+    const updatedAt = raw.updatedAt || raw.Modified || raw.modified || fechaISO || new Date().toISOString();
+    const uidBase = raw.uid || raw.UID || raw.ID || raw.Id || raw.id || ('remote-' + String(index || 0));
+    return Object.assign({}, raw, {
+      uid: String(uidBase),
+      areaPrincipal: areaPrincipal,
+      area: raw.area || areaPrincipal,
+      subarea: subarea,
+      frecuencia: frecuencia,
+      observacion: observacion,
+      observaciones: raw.observaciones || raw.Observaciones || observacion,
+      item: raw.item || raw.Item || (items.length ? items.join(' | ') : ''),
+      items: Array.isArray(raw.items) && raw.items.length ? raw.items : items,
+      empleado: empleado,
+      usuario: raw.usuario || raw.Usuario || empleado,
+      estado: estado,
+      estadoCaptura: raw.estadoCaptura || estado,
+      rol: rol,
+      fechaISO: fechaISO,
+      fecha: fechaVisible,
+      updatedAt: updatedAt,
+      origenSync: raw.origenSync || 'nube'
+    });
+  }
+  function normalizeRemoteRegistrosCollection(list){
+    const source = Array.isArray(list) ? list : [];
+    return source
+      .map(function(item, index){ return normalizeRemoteRegistroForPlantOps(item, index); })
+      .filter(function(item){ return !!item; });
+  }
   function normalizeWebhookValue(value){
     if(value == null) return '';
     if(Array.isArray(value)){
@@ -6819,7 +6877,7 @@ function abrirNotificacionEstibadoresOperador(){
     }
     applyingRemoteSnapshot = true;
     try {
-      registros = cloneSync(Array.isArray(normalized.data.registros) ? normalized.data.registros : []);
+      registros = normalizeRemoteRegistrosCollection(Array.isArray(normalized.data.registros) ? normalized.data.registros : []);
       window.registros = cloneSync(registros);
       try { if(typeof asegurarUidEnRegistros === 'function') asegurarUidEnRegistros(); } catch(e){}
       try { if(typeof persistCombinedToSeparatedStores === 'function') persistCombinedToSeparatedStores(); } catch(e){ console.error('Error persistiendo stores activos tras pull remoto', e); }
@@ -7007,7 +7065,8 @@ function abrirNotificacionEstibadoresOperador(){
         if(!normalized){
           setSyncStatus('La nube respondió, pero el formato no coincidió con el snapshot esperado.', 'warn');
         } else {
-          setSyncStatus(changed ? 'Datos operativos cargados desde la nube.' : 'Datos operativos ya estaban actualizados.', 'ok');
+          const total = Array.isArray(normalized.data && normalized.data.registros) ? normalized.data.registros.length : 0;
+          setSyncStatus(changed ? ('Datos operativos cargados desde la nube. Registros detectados: ' + total + '.') : 'Datos operativos ya estaban actualizados.', 'ok');
         }
       }
       return changed || !!normalized;

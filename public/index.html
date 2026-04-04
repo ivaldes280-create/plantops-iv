@@ -6656,6 +6656,67 @@ function abrirNotificacionEstibadoresOperador(){
       }
     };
   }
+
+  function normalizeWebhookValue(value){
+    if(value == null) return '';
+    if(Array.isArray(value)){
+      return value
+        .map(function(v){ return v == null ? '' : String(v).trim(); })
+        .filter(Boolean)
+        .join(' | ');
+    }
+    if(typeof value === 'object'){
+      try { return JSON.stringify(value); }
+      catch(_){ return String(value); }
+    }
+    return String(value).trim();
+  }
+  function pickLatestRegistroForWebhook(registrosList){
+    const list = Array.isArray(registrosList) ? registrosList.filter(function(r){ return r && typeof r === 'object'; }) : [];
+    if(!list.length) return null;
+    return list.slice().sort(function(a, b){
+      const ta = new Date(a.updatedAt || a.fechaISO || a.fechaRegistro || a.fecha || 0).getTime() || 0;
+      const tb = new Date(b.updatedAt || b.fechaISO || b.fechaRegistro || b.fecha || 0).getTime() || 0;
+      return tb - ta;
+    })[0] || list[list.length - 1];
+  }
+  function buildWebhookPayloadFromRegistro(registro, snapshot){
+    if(!registro || typeof registro !== 'object') return null;
+    const area = normalizeWebhookValue(registro.areaPrincipal || registro.area || '');
+    const subarea = normalizeWebhookValue(registro.subarea || registro.subArea || '');
+    const frecuencia = normalizeWebhookValue(registro.frecuencia || '');
+    const estado = normalizeWebhookValue(registro.estadoCaptura || registro.estado || '');
+    const item = normalizeWebhookValue(
+      registro.item ||
+      registro.itemsUnicosAportados ||
+      registro.items ||
+      registro.itemsRescatados ||
+      []
+    );
+    const observaciones = normalizeWebhookValue(registro.observaciones || registro.observacion || '');
+    const empleado = normalizeWebhookValue(registro.empleado || registro.usuario || '');
+    return {
+      area: area,
+      subarea: subarea,
+      frecuencia: frecuencia,
+      estado: estado,
+      item: item,
+      observaciones: observaciones,
+      empleado: empleado,
+      uid: normalizeWebhookValue(registro.uid || ''),
+      usuario: normalizeWebhookValue(registro.usuario || ''),
+      rol: normalizeWebhookValue(registro.rol || ''),
+      fechaRegistro: normalizeWebhookValue(registro.fechaISO || registro.fechaRegistro || registro.fecha || ''),
+      updatedAt: normalizeWebhookValue(registro.updatedAt || (snapshot && snapshot.updatedAt) || ''),
+      origen: 'PlantOPS',
+      versionPayload: 2
+    };
+  }
+  function buildOperationalCompatPayload(snapshot){
+    const registrosList = snapshot && snapshot.data && Array.isArray(snapshot.data.registros) ? snapshot.data.registros : [];
+    const latest = pickLatestRegistroForWebhook(registrosList);
+    return buildWebhookPayloadFromRegistro(latest, snapshot);
+  }
   function applyStructureSnapshot(store){
     if(!store || typeof store !== 'object') return;
     const normalized = {
@@ -6873,13 +6934,14 @@ function abrirNotificacionEstibadoresOperador(){
     lastPushAttemptAt = nowMs;
     try {
       setSyncStatus('Sincronizando cambios a la nube' + (reason ? ' (' + reason + ')' : '') + '...', 'ok');
+      const compatPayload = buildOperationalCompatPayload(snapshot) || envelope;
       const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Accept': 'application/json, text/plain, */*',
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(envelope),
+        body: JSON.stringify(compatPayload),
         cache: 'no-store'
       });
       const rawText = await response.text();
